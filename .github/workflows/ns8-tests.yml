@@ -13,6 +13,10 @@ on:
       args:
         required: false
         type: string
+      repo_ref:
+        required: false
+        type: string
+        default: ${{ github.sha }}
 
 jobs:
   test-module:
@@ -24,6 +28,8 @@ jobs:
           python-version: 3.9
       - name: Checkout
         uses: actions/checkout@v2.4.0
+        with:
+            ref: ${{ inputs.repo_ref }}
       - name: Setup SSH Keys
         run: |
           set -e -x
