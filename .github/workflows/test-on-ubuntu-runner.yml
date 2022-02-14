@@ -18,6 +18,8 @@ on:
         type: string
         default: ${{ github.sha }}
 
+permissions: read-all
+
 jobs:
   test-module:
     runs-on: ubuntu-20.04
