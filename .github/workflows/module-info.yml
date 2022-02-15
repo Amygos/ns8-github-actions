@@ -1,7 +1,8 @@
-name: "Setup NS8 cluster and test module"
+name: "Retrieve NS8 module informations"
 
 on:
   workflow_call:
+  workflow_dispatch:
 
 jobs:
   module:
