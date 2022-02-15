@@ -1,8 +1,22 @@
 name: "Retrieve NS8 module informations"
 
 on:
-  workflow_call:
   workflow_dispatch:
+  workflow_call:
+    outputs:
+      owner:
+        description: "The owner of the repository, that can an users or an organization"
+        value: ${{ jobs.module.outputs.owner}}
+      tag:
+        description: "The container's tag of the module"
+        value: ${{ jobs.module.outputs.tag }}
+      sha:
+        description: "The git commit hash of the current module version"
+        value: ${{ jobs.module.outputs.sha }}
+      short_sha:
+        description: "First 8 chars of the commit hash"
+        value: ${{ jobs.module.outputs.short_sha }}
+
 
 jobs:
   module:
