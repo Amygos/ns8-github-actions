@@ -1,0 +1,144 @@
+name: "Setup NS8 cluster and test module"
+
+on:
+  workflow_call:
+    inputs:
+      script:
+        required: false
+        type: string
+        default: test-module.sh
+      path:
+        required: false
+        type: string
+      args:
+        required: false
+        type: string
+      repo_ref:
+        required: false
+        type: string
+        default: ${{ github.sha }}
+      debug_shell:
+        required: false
+        type: boolean
+        default: false
+      coremodules:
+        required: false
+        type: string
+        default: ""
+      corebranch:
+        required: false
+        type: string
+        default: main
+      setup_cluster:
+        required: false
+        type: boolean
+        default: true
+      tf_project:
+        required: false
+        type: string
+        default: "NS8-CI"
+      tf_doamin:
+        required: false
+        type: string
+        default: "ci.nethserver.net"
+      leader_nodes:
+        required: false
+        type: string
+        default: "cs1 dn1"
+    secrets:
+      do_token:
+        required: true
+env:
+  TF_VAR_project: ${{ inputs.tf_project }}
+  TF_VAR_domain: ${{ inputs.tf_doamin }}
+
+jobs:
+  info:
+    runs-on: ubuntu-latest
+    outputs:
+      nodes: ${{ steps.nodes.outputs.list }}
+      short_sha: ${{ steps.short_sha.outputs.value }}
+    steps:
+      - id: nodes
+        run: |
+          nodes=$(jq -ncR '[inputs]' <<< "$(echo ${{ inputs.leader_nodes }} | tr ' ' '\n')")
+          echo "::set-output name=list::${nodes}"
+      - id: short_sha
+        run: echo "::set-output name=value::$( echo ${{ inputs.repo_ref }} | cut -c1-8 )"
+  infra_create:
+    name: "Create the infrastructure"
+    runs-on: ubuntu-latest
+    needs: info
+    strategy:
+      fail-fast: false
+      matrix:
+          node: ${{ fromJSON(needs.info.outputs.nodes) }}
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ inputs.repo_ref }}
+          path: module
+      - uses: actions/checkout@v3
+        with:
+          repository: NethServer/ns8-terraform-infra
+          path: infra
+      - name: HashiCorp - Setup Terraform
+        uses: hashicorp/setup-terraform@v1.2.1
+        with:
+          terraform_wrapper: false
+      - name: HashiCorp - Terraform Apply
+        env:
+          TF_VAR_do_token: ${{ secrets.do_token }}
+        run: |
+          terraform init
+          terraform workspace new ${{ matrix.node }}-${{ needs.info.outputs.short_sha }}
+          terraform apply -var 'leader_node={"${{ matrix.node }}":"ams3"}' -auto-approve
+        working-directory: ${{ github.workspace }}/infra
+      - name: HashiCorp - Terraform Output Deploy Key
+        run: |
+          terraform output -raw deploy-key > ${{ github.workspace }}/key
+          chmod 700 ${{ github.workspace }}/key
+        working-directory: ${{ github.workspace }}/infra
+      - name: Wait for SSH server do be READY
+        run: |
+          for (( n=1; c<=20; c++ )); do
+            ssh -o StrictHostKeyChecking=no -o GlobalKnownHostsFile=/dev/null -i ${{ github.workspace }}/key \
+              root@${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} true
+            if [ "$?" = "0" ]; then break; fi
+            sleep 1
+          done
+      - name: Setup NS8 Cluster
+        if: inputs.setup_cluster
+        run: |
+          ssh -o StrictHostKeyChecking=no -o GlobalKnownHostsFile=/dev/null -i ${{ github.workspace }}/key \
+          root@${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} << EOF
+            set -e -x
+            curl -O https://raw.githubusercontent.com/NethServer/ns8-core/${{ inputs.corebranch }}/core/install.sh
+            sudo -E PATH=$PATH HOME=/root bash install.sh ${{ inputs.coremodules }}
+            sudo create-cluster $(hostname -f):55820 10.5.4.0/24 Nethesis,1234
+          EOF
+      - name: Run tests
+        run: |
+          ./${{ inputs.script }} ${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} ${{ inputs.args }}
+        working-directory: ${{ github.workspace }}/module/${{ inputs.path }}
+        env:
+          SSH_KEYFILE: ${{ github.workspace }}/key
+          COREMODULES: ${{ inputs.coremodules }}
+      - name: Save tests results
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: tests-logs-${{ matrix.node }}
+          path: |
+             ${{ github.workspace }}/module/${{ inputs.path }}/tests/outputs/
+      - name: Debugging with tmate
+        if: ${{ inputs.debug_shell == true && ! cancelled() && always() }}
+        uses: mxschmitt/action-tmate@v3.1
+      - name: Destroy the infrastructure
+        if: ${{ always() }}
+        env:
+          TF_VAR_do_token: ${{ secrets.do_token }}
+        run: |
+          terraform init
+          terraform apply -destroy -auto-approve
+        working-directory: ${{ github.workspace }}/infra
