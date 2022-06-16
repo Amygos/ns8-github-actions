@@ -30,6 +30,7 @@ jobs:
           paths=$(jq -ncR '[inputs]' <<< "$(echo ${{ inputs.cache_paths }} | tr ' ' '\n')")
           echo "::set-output name=list::${paths}"
       - id: cache_setup
+        if: steps.cache_setup.outputs.list != '[""]'
         uses: actions/cache@v3
         with:
           path: ${{ fromJSON(steps.cache_paths.outputs.list) }}
