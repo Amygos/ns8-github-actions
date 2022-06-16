@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache@v3
         with:
           path: cache
-          key: ${{ fromJSON(steps.cache_paths.outputs.list) }}
+          key: "${{ fromJSON(steps.cache_paths.outputs.list) }}"
       - id: build
         run: |
           # Build the module images
