@@ -2,6 +2,12 @@ name: "Publish images"
 
 on:
   workflow_call:
+    inputs:
+      cache_paths:
+        required: false
+        type: string
+        description: "Space-separated list of paths to cache"
+        default: ""
 
 permissions:
   packages: write
@@ -19,6 +25,15 @@ jobs:
         with:
           path: ui/node_modules
           key: "yarn-${{ hashFiles('ui/yarn.lock') }}"
+      - id: cache_paths
+        run: |
+          paths=$(jq -ncR '[inputs]' <<< "$(echo ${{ inputs.cache_paths }} | tr ' ' '\n')")
+          echo "::set-output name=list::${paths}"
+      - id: cache_setup
+        uses: actions/cache@v3
+        with:
+          path: cache
+          key: ${{ fromJSON(steps.cache_paths.outputs.list) }}
       - id: build
         run: |
           # Build the module images
