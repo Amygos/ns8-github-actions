@@ -32,8 +32,8 @@ jobs:
       - id: cache_setup
         uses: actions/cache@v3
         with:
-          path: cache
-          key: "${{ fromJSON(steps.cache_paths.outputs.list) }}"
+          path: ${{ fromJSON(steps.cache_paths.outputs.list) }}
+          key: build-cache
       - id: build
         run: |
           # Build the module images
