@@ -29,6 +29,7 @@ jobs:
         run: |
           paths=$(jq -ncR '[inputs]' <<< "$(echo ${{ inputs.cache_paths }} | tr ' ' '\n')")
           echo ${{ inputs.cache_paths }}
+          echo okkkkkkkkkkkkkkkkkkkkkkkkkkkkk
           echo "::set-output name=list::${paths}"
       - id: cache_setup
         if: steps.cache_setup.outputs.list != '[""]'
