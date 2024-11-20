@@ -7,6 +7,11 @@ on:
         description: "List of images to analyze"
         required: true
         type: string
+      severity:
+        description: "Severities of vulnerabilities to scan for and display"
+        required: false
+        type: string
+        default: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
 
 permissions:
   security-events: write
@@ -24,6 +29,7 @@ jobs:
         uses: aquasecurity/trivy-action@0.28.0
         with:
           image-ref: ${{ matrix.image }}
+          severity: ${{ inputs.severity }}
           format: 'sarif'
           output: 'trivy-results.sarif'
       - name: Upload Trivy scan results to GitHub Security tab
