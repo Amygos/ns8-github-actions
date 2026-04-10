@@ -71,6 +71,7 @@ jobs:
     outputs:
       nodes: ${{ steps.nodes.outputs.list }}
       short_sha: ${{ steps.short_sha.outputs.value }}
+      execution_id: ${{ steps.execution_id.outputs.value }}
     steps:
       - name: "Create the list of leader nodes"
         id: nodes
@@ -80,13 +81,35 @@ jobs:
       - name: "Get the short sha of the current commit"
         id: short_sha
         run: echo "value=$( echo ${{ inputs.repo_ref }} | cut -c1-8 )" >> $GITHUB_OUTPUT
+      - name: "Build a ref-aware execution id"
+        id: execution_id
+        env:
+          REF_NAME: ${{ github.event.workflow_run.head_branch || github.head_ref || github.ref_name }}
+          SHORT_SHA: ${{ steps.short_sha.outputs.value }}
+        run: |
+          ref_slug=$(
+            printf '%s' "$REF_NAME" |
+              tr '[:upper:]' '[:lower:]' |
+              sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g'
+          )
+          if [ -z "$ref_slug" ]; then
+            ref_slug=ref
+          fi
+          ref_hash=$(printf '%s' "$REF_NAME" | sha1sum | cut -c1-8)
+          ref_slug=$(printf '%s' "$ref_slug" | cut -c1-20)
+          echo "value=${ref_slug}-${ref_hash}-${SHORT_SHA}" >> $GITHUB_OUTPUT
   test-module:
     concurrency:
-      group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch || github.ref_name }}-${{ matrix.node }}
+      group: ${{ github.workflow }}-${{ github.event.workflow_run.head_branch || github.head_ref || github.ref_name }}-${{ matrix.node }}
       cancel-in-progress: true
     name: "Test on DigitalOcean"
     runs-on: ubuntu-latest
     needs: info
+    env:
+      EXECUTION_ID: ${{ needs.info.outputs.execution_id }}
+      WORKSPACE_NAME: ${{ matrix.node }}-${{ needs.info.outputs.execution_id }}
+      CLUSTER_HOST: ${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.execution_id }}.${{ inputs.do_domain }}
+      STATUS_CONTEXT: continuous-integration/robotframework/${{ matrix.node }}/${{ needs.info.outputs.execution_id }}
     strategy:
       fail-fast: false
       matrix:
@@ -111,7 +134,7 @@ jobs:
             -f "state=pending" \
             -f "target_url=$status_page" \
             -f "description=Test on DigitalOcean (${{ matrix.node }})" \
-            -f "context=continuous-integration/robotframework/${{ matrix.node }})"
+            -f "context=$STATUS_CONTEXT"
       - name: "Checkout the module repository"
         uses: actions/checkout@v6
         with:
@@ -131,7 +154,7 @@ jobs:
           TF_VAR_do_token: ${{ secrets.do_token }}
         run: |
           tofu init
-          tofu workspace new ${{ matrix.node }}-${{ needs.info.outputs.short_sha }}
+          tofu workspace new "$WORKSPACE_NAME"
           tofu apply -var 'leader_node={"${{ matrix.node }}":"ams3"}' -auto-approve
         working-directory: ${{ github.workspace }}/infra
       - name: "OpenTofu - Tofu Output Deploy Key"
@@ -144,7 +167,7 @@ jobs:
           for (( c=1; c<=20; c++ )); do
           set +e
             ssh -o StrictHostKeyChecking=no -o GlobalKnownHostsFile=/dev/null -i ${{ github.workspace }}/key \
-              root@${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} true
+              root@$CLUSTER_HOST true
             if [ "$?" = "0" ]; then exit 0; fi
             sleep 1
           done
@@ -152,13 +175,13 @@ jobs:
       - name: "Wait for boot to complete"
         run: |
           ssh -o StrictHostKeyChecking=no -o GlobalKnownHostsFile=/dev/null -i ${{ github.workspace }}/key \
-            root@${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} \
+            root@$CLUSTER_HOST \
             'systemctl is-system-running --wait || : '
       - name: "Install NS8 system"
         if: inputs.setup_cluster
         run: |
           ssh -o StrictHostKeyChecking=no -o GlobalKnownHostsFile=/dev/null -i ${{ github.workspace }}/key \
-          root@${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} << EOF
+          root@$CLUSTER_HOST << EOF
             set -e -x
             [ -f /etc/yum.conf ] && echo "exclude=kernel* kmod* microcode_ctl grub2*" >> /etc/yum.conf # disable Rocky Linux kernel upgrade
             curl -O https://raw.githubusercontent.com/NethServer/ns8-core/${{ inputs.corebranch }}/core/install.sh
@@ -168,14 +191,14 @@ jobs:
         if: inputs.setup_cluster
         run: |
           ssh -o StrictHostKeyChecking=no -o GlobalKnownHostsFile=/dev/null -i ${{ github.workspace }}/key \
-          root@${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} << EOF
+          root@$CLUSTER_HOST << EOF
             set -e -x
-            create-cluster ${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }}:55820 10.5.4.0/24 Nethesis,1234
+            create-cluster $CLUSTER_HOST:55820 10.5.4.0/24 Nethesis,1234
           EOF
       - name: "Run tests"
         id: run_tests
         run: |
-          ./${{ inputs.script }} ${{ matrix.node }}.leader.${{ matrix.node }}-${{ needs.info.outputs.short_sha }}.${{ env.TF_VAR_domain }} ${{ inputs.args }}
+          ./${{ inputs.script }} $CLUSTER_HOST ${{ inputs.args }}
         working-directory: ${{ github.workspace }}/module/${{ inputs.path }}
         env:
           SSH_KEYFILE: ${{ github.workspace }}/key
@@ -218,7 +241,7 @@ jobs:
             -f "state=$state" \
             -f "target_url=$status_page" \
             -f "description=Test on DigitalOcean (${{ matrix.node }})" \
-            -f "context=continuous-integration/robotframework/${{ matrix.node }})"
+            -f "context=$STATUS_CONTEXT"
       - name: "Debugging with tmate"
         if: ${{ inputs.debug_shell == true && ! cancelled() && always() }}
         uses: mxschmitt/action-tmate@v3
